@@ -15,7 +15,8 @@ WIDTH, HEIGHT = 800, 600
 GRID_SIZE = 20
 GRID_WIDTH = WIDTH // GRID_SIZE
 GRID_HEIGHT = HEIGHT // GRID_SIZE
-FPS = 5
+FPS = 8  # lightweight but smooth
+GRADIENT_UPDATE_MS = 500  # update background gradient every 500ms
 
 # Colors
 BLACK = (0, 0, 0)
@@ -150,8 +151,9 @@ class Food:
 
 class Game:
     def __init__(self):
+        # ...existing code...
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("Snake AI vs Player (A* Enhanced)")
+        pygame.display.set_caption("Neon Snake Battle")
         self.clock = pygame.time.Clock()
         self.player_snake = Snake(BLUE)
         self.ai_snake = Snake(GREEN, is_ai=True)
@@ -161,41 +163,71 @@ class Game:
         self.games_played = 0
         self.ai_success_rate = 0.0
         self.transition_alpha = 0
-        self.background_colors = [(30, 0, 60), (60, 0, 120)]  # Gradient colors
+
+        # Caching surfaces & UI caches for lightweight rendering
+        self.bg_surface = None
+        self.bg_last_update = 0
+        self.grid_surface = None
+        self.grid_created = False
+
+        # Cache score renders to avoid per-frame font allocation
+        self.last_player_score = -1
+        self.last_ai_score = -1
+        self.player_score_surf = None
+        self.ai_score_surf = None
+        self.games_surf = None
+        self.success_rate_surf = None
+
         if pygame.mixer.music:
-            pygame.mixer.music.play(-1)  # Loop background music
+            try:
+                pygame.mixer.music.play(-1)  # Loop background music
+            except:
+                pass
 
     def draw_background(self):
-        # Dynamic color-shifting gradient
-        t = pygame.time.get_ticks() / 10000
-        c1 = (int(30 + 20 * math.sin(t)), 0, int(60 + 20 * math.cos(t)))
-        c2 = (int(60 + 20 * math.cos(t)), 0, int(120 + 20 * math.sin(t)))
-        surface = pygame.Surface((WIDTH, HEIGHT))
-        for y in range(HEIGHT):
-            alpha = y / HEIGHT
-            color = tuple(int(c1[i] * (1 - alpha) + c2[i] * alpha) for i in range(3))
-            pygame.draw.line(surface, color, (0, y), (WIDTH, y))
-        self.screen.blit(surface, (0, 0))
+        # Create/update a cached gradient surface every GRADIENT_UPDATE_MS milliseconds
+        now = pygame.time.get_ticks()
+        if not self.bg_surface or now - self.bg_last_update > GRADIENT_UPDATE_MS:
+            self.bg_surface = pygame.Surface((WIDTH, HEIGHT))
+            t = now / 10000
+            c1 = (int(30 + 20 * math.sin(t)), 0, int(60 + 20 * math.cos(t)))
+            c2 = (int(60 + 20 * math.cos(t)), 0, int(120 + 20 * math.sin(t)))
+            # coarse-step gradient to keep it lightweight
+            step = 8
+            for y in range(0, HEIGHT, step):
+                alpha = y / HEIGHT
+                color = tuple(int(c1[i] * (1 - alpha) + c2[i] * alpha) for i in range(3))
+                pygame.draw.rect(self.bg_surface, color, (0, y, WIDTH, step))
+            self.bg_last_update = now
+        self.screen.blit(self.bg_surface, (0, 0))
 
     def draw_neon_grid(self):
-        surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        for x in range(0, WIDTH, GRID_SIZE):
-            pygame.draw.line(surface, (*NEON_CYAN, 100), (x, 0), (x, HEIGHT), 2)
-        for y in range(0, HEIGHT, GRID_SIZE):
-            pygame.draw.line(surface, (*NEON_CYAN, 100), (0, y), (WIDTH, y), 2)
-        self.screen.blit(surface, (0, 0))
+        # Create a single grid surface once and reuse it
+        if not self.grid_created:
+            self.grid_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            line_color = (*NEON_CYAN, 60)
+            # draw fewer lines to be lightweight
+            for x in range(0, WIDTH, GRID_SIZE):
+                pygame.draw.line(self.grid_surface, line_color, (x, 0), (x, HEIGHT))
+            for y in range(0, HEIGHT, GRID_SIZE):
+                pygame.draw.line(self.grid_surface, line_color, (0, y), (WIDTH, y))
+            self.grid_created = True
+        self.screen.blit(self.grid_surface, (0, 0))
 
     def draw_snake(self, snake):
-        surface = pygame.Surface((GRID_SIZE, GRID_SIZE), pygame.SRCALPHA)
+        # Lightweight snake rendering: direct rects + simple head glow
         for i, segment in enumerate(snake.body):
-            # Gradient glow effect
-            alpha = 255 - i * 10
-            if alpha < 50:
-                alpha = 50
-            pygame.draw.rect(surface, (*snake.color, alpha), (0, 0, GRID_SIZE, GRID_SIZE))
-            pygame.draw.rect(surface, WHITE, (0, 0, GRID_SIZE, GRID_SIZE), 1)
-            self.screen.blit(surface, (segment[0] * GRID_SIZE, segment[1] * GRID_SIZE))
-            surface.fill((0, 0, 0, 0))
+            x, y = segment[0] * GRID_SIZE, segment[1] * GRID_SIZE
+            rect = pygame.Rect(x, y, GRID_SIZE, GRID_SIZE)
+            # Head gets a small glow
+            if i == 0:
+                glow = pygame.Surface((GRID_SIZE * 3, GRID_SIZE * 3), pygame.SRCALPHA)
+                gx = GRID_SIZE
+                pygame.draw.ellipse(glow, (*snake.color, 60), (0, 0, GRID_SIZE * 3, GRID_SIZE * 3))
+                self.screen.blit(glow, (x - gx, y - gx))
+            # Body: direct fill and thin border
+            pygame.draw.rect(self.screen, snake.color, rect)
+            pygame.draw.rect(self.screen, (200, 200, 255), rect, 1)
 
     def draw(self):
         self.draw_background()
@@ -203,74 +235,81 @@ class Game:
         if self.state in ["playing", "paused"]:
             self.draw_neon_grid()
 
-            # Draw snakes with glow
+            # Draw snakes with lightweight glow
             self.draw_snake(self.player_snake)
             self.draw_snake(self.ai_snake)
 
-            # Draw animated food
-            surface = pygame.Surface((GRID_SIZE * 2, GRID_SIZE * 2), pygame.SRCALPHA)
-            scale = self.food.anim_scale
-            size = int(GRID_SIZE * scale)
-            pygame.draw.ellipse(surface, RED, ((GRID_SIZE * 2 - size) // 2, (GRID_SIZE * 2 - size) // 2, size, size))
-            self.screen.blit(surface, (self.food.position[0] * GRID_SIZE - (GRID_SIZE * (scale - 1)) / 2,
-                                       self.food.position[1] * GRID_SIZE - (GRID_SIZE * (scale - 1)) / 2))
+            # Draw animated food (lightweight)
+            size = int(GRID_SIZE * (0.9 + 0.1 * math.sin(pygame.time.get_ticks() / 200)))
+            food_rect = pygame.Rect(0, 0, size, size)
+            food_rect.center = (self.food.position[0] * GRID_SIZE + GRID_SIZE // 2,
+                                self.food.position[1] * GRID_SIZE + GRID_SIZE // 2)
+            pygame.draw.ellipse(self.screen, RED, food_rect)
+            pygame.draw.ellipse(self.screen, WHITE, food_rect, 1)
 
-            # Draw A* path
+            # Draw A* path (sparse visual)
             if self.ai_snake.alive and self.ai_snake.path:
-                for pos in self.ai_snake.path[1:]:
-                    pygame.draw.circle(self.screen, (*YELLOW, 150),
-                                       (pos[0] * GRID_SIZE + GRID_SIZE // 2, pos[1] * GRID_SIZE + GRID_SIZE // 2),
-                                       GRID_SIZE // 4)
+                for pos in self.ai_snake.path[1::2]:  # draw every other node for lower overhead
+                    pygame.draw.circle(self.screen, YELLOW, (pos[0] * GRID_SIZE + GRID_SIZE // 2,
+                                                            pos[1] * GRID_SIZE + GRID_SIZE // 2),
+                                       GRID_SIZE // 6)
 
-            # Draw scores with bounce animation
-            player_score = FONT.render(f"Player: {self.player_snake.score}", True, NEON_CYAN)
-            ai_score = FONT.render(f"AI: {self.ai_snake.score}", True, NEON_PINK)
-            player_offset = 10 * math.sin(self.player_snake.score_anim) if self.player_snake.score_anim > 0 else 0
-            ai_offset = 10 * math.sin(self.ai_snake.score_anim) if self.ai_snake.score_anim > 0 else 0
-            self.screen.blit(player_score, (10, 10 + player_offset))
-            self.screen.blit(ai_score, (10, 40 + ai_offset))
-            games = FONT.render(f"Games: {self.games_played}", True, WHITE)
-            success_rate = FONT.render(f"AI Success: {self.ai_success_rate:.1%}", True, WHITE)
-            self.screen.blit(games, (WIDTH - 150, 10))
-            self.screen.blit(success_rate, (WIDTH - 150, 40))
+            # Cache and blit scores only when changed
+            if self.player_snake.score != self.last_player_score:
+                self.player_score_surf = FONT.render(f"Player: {self.player_snake.score}", True, NEON_CYAN)
+                self.last_player_score = self.player_snake.score
+            if self.ai_snake.score != self.last_ai_score:
+                self.ai_score_surf = FONT.render(f"AI: {self.ai_snake.score}", True, NEON_PINK)
+                self.last_ai_score = self.ai_snake.score
+            if self.games_surf is None:
+                self.games_surf = FONT.render(f"Games: {self.games_played}", True, WHITE)
+            if self.success_rate_surf is None:
+                self.success_rate_surf = FONT.render(f"AI Success: {self.ai_success_rate:.1%}", True, WHITE)
 
-            # Update animations
+            # blit cached surfaces
+            if self.player_score_surf:
+                self.screen.blit(self.player_score_surf, (10, 10))
+            if self.ai_score_surf:
+                self.screen.blit(self.ai_score_surf, (10, 40))
+            if self.games_surf:
+                self.screen.blit(self.games_surf, (WIDTH - 170, 10))
+            if self.success_rate_surf:
+                self.screen.blit(self.success_rate_surf, (WIDTH - 170, 40))
+
+            # lightweight animation counters
             if self.player_snake.score_anim > 0:
                 self.player_snake.score_anim -= 1
             if self.ai_snake.score_anim > 0:
                 self.ai_snake.score_anim -= 1
             self.food.update()
 
+        # ...existing code for start/paused/over screens but keep texts concise...
         if self.state == "start":
             title = TITLE_FONT.render("Neon Snake Battle", True, NEON_CYAN)
-            start_text = FONT.render("Press S to Start", True, WHITE)
-            instr_text = FONT.render("Arrow Keys: Move | P: Pause | R: Restart", True, WHITE)
-            exit_text = FONT.render("Press Q to Exit", True, WHITE)
+            start_text = FONT.render("S: Start    Q: Quit", True, WHITE)
+            instr_text = FONT.render("Arrows: Move   P: Pause   R: Restart", True, WHITE)
             self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, HEIGHT // 3))
             self.screen.blit(start_text, (WIDTH // 2 - start_text.get_width() // 2, HEIGHT // 2))
             self.screen.blit(instr_text, (WIDTH // 2 - instr_text.get_width() // 2, HEIGHT // 2 + 50))
-            self.screen.blit(exit_text, (WIDTH // 2 - exit_text.get_width() // 2, HEIGHT // 2 + 100))
 
         if self.state == "paused":
-            overlay = pygame.Surface((WIDTH, HEIGHT))
-            overlay.set_alpha(150)
-            overlay.fill(BLACK)
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
             self.screen.blit(overlay, (0, 0))
             pause_text = TITLE_FONT.render("Paused", True, NEON_PINK)
-            resume_text = FONT.render("Press P to Resume", True, WHITE)
+            resume_text = FONT.render("P: Resume", True, WHITE)
             self.screen.blit(pause_text, (WIDTH // 2 - pause_text.get_width() // 2, HEIGHT // 2 - 50))
             self.screen.blit(resume_text, (WIDTH // 2 - resume_text.get_width() // 2, HEIGHT // 2 + 50))
 
         if self.state == "over":
-            overlay = pygame.Surface((WIDTH, HEIGHT))
-            overlay.set_alpha(self.transition_alpha)
-            overlay.fill(BLACK)
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, min(self.transition_alpha, 220)))
             self.screen.blit(overlay, (0, 0))
             winner_text = TITLE_FONT.render(f"{self.winner} Wins!", True, NEON_CYAN)
-            restart_text = FONT.render("Press R to Restart", True, WHITE)
+            restart_text = FONT.render("R: Restart   Q: Quit", True, WHITE)
             self.screen.blit(winner_text, (WIDTH // 2 - winner_text.get_width() // 2, HEIGHT // 2 - 50))
             self.screen.blit(restart_text, (WIDTH // 2 - restart_text.get_width() // 2, HEIGHT // 2 + 50))
-            self.transition_alpha = min(self.transition_alpha + 10, 200)
+            self.transition_alpha = min(self.transition_alpha + 10, 220)
 
         pygame.display.flip()
 
