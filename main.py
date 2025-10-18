@@ -8,7 +8,13 @@ import math
 
 # Initialize Pygame
 pygame.init()
-pygame.mixer.init()
+
+# Make mixer init defensive (some environments don't have audio)
+try:
+    pygame.mixer.init()
+except Exception:
+    # continue without audio; sounds will be disabled below if necessary
+    pass
 
 # Constants
 WIDTH, HEIGHT = 800, 600
@@ -35,15 +41,24 @@ TITLE_FONT = pygame.font.SysFont('arial', 48)
 
 # Sounds
 try:
-    BITE_SOUND = pygame.mixer.Sound('big-crunch-2-90138.wav')  # Placeholder: replace with actual file
-    COLLISION_SOUND = pygame.mixer.Sound('Voicy_TITANIC FLUTE.wav')
-    pygame.mixer.music.load('80s-synthwave-vibe-loop-22508.mp3')  # Placeholder: replace with actual file
-    pygame.mixer.music.set_volume(0.3)
-except:
-    # Fallback if sound files are missing
+    # Only attempt to load sounds if mixer was initialized
+    if pygame.mixer.get_init():
+        BITE_SOUND = pygame.mixer.Sound('big-crunch-2-90138.wav')  # Placeholder: replace with actual file
+        COLLISION_SOUND = pygame.mixer.Sound('Voicy_TITANIC FLUTE.wav')
+        pygame.mixer.music.load('80s-synthwave-vibe-loop-22508.mp3')  # Placeholder: replace with actual file
+        pygame.mixer.music.set_volume(0.3)
+    else:
+        BITE_SOUND = None
+        COLLISION_SOUND = None
+        pygame.mixer.music = None
+except Exception:
+    # Fallback if sound files are missing or loading fails
     BITE_SOUND = None
     COLLISION_SOUND = None
-    pygame.mixer.music = None
+    try:
+        pygame.mixer.music = None
+    except Exception:
+        pass
 
 
 class Snake:
